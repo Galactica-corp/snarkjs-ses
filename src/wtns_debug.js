@@ -37,13 +37,13 @@ export default async function wtnsDebug(input, wasmFileName, wtnsFileName, symNa
     if (options.set) {
         if (!sym) sym = await loadSyms(symName);
         wcOps.logSetSignal= function(labelIdx, value) {
-            if (logger) logger.info("SET " + sym.labelIdx2Name[labelIdx] + " <-- " + value.toString());
+            if (logger) logger.info("SET " + sym.labelIdx2Name[labelIdx] + " < -- " + value.toString());
         };
     }
     if (options.get) {
         if (!sym) sym = await loadSyms(symName);
         wcOps.logGetSignal= function(varIdx, value) {
-            if (logger) logger.info("GET " + sym.labelIdx2Name[varIdx] + " --> " + value.toString());
+            if (logger) logger.info("GET " + sym.labelIdx2Name[varIdx] + " -- > " + value.toString());
         };
     }
     if (options.trigger) {
