@@ -45,3 +45,34 @@ export default async function wtnsCalculate(input, wasmFileName, wtnsFileName, o
         await fdWtns.close();
     }
 }
+
+/**
+ * Patched alternative to wtnsCalculate that does not use the file system. (works better in SES)
+ * @param {*} wasm file as Uint8Array
+ * @param {*} options 
+ * @returns witness as Uint8Array
+ */
+export async function wtnsCalculateMemory(input, wasm, options) {
+    const wc = await WitnessCalculatorBuilder(wasm);
+    // maybe not needed for witness because it is written to mem file
+    // if (wc.circom_version() == 1) {
+    //     return await wc.calculateBinWitness(input);
+    // } else {
+    //     return await wc.calculateWTNSBin(input);
+    // }
+    if (wc.circom_version() == 1) {
+        const w = await wc.calculateBinWitness(input);
+
+        const fdWtns = await binFileUtils.createBinFile(wtnsFileName, "wtns", 2, 2);
+
+        await wtnsUtils.writeBin(fdWtns, w, wc.prime);
+        await fdWtns.close();
+    } else {
+        const fdWtns = await fastFile.createOverride(wtnsFileName);
+
+        const w = await wc.calculateWTNSBin(input);
+
+        await fdWtns.write(w);
+        await fdWtns.close();
+    }
+}

@@ -26,13 +26,27 @@ import { Scalar, utils, BigBuffer } from "ffjavascript";
 const {stringifyBigInts} = utils;
 
 export default async function groth16Prove(zkeyFileName, witnessFileName, logger) {
-    const {fd: fdWtns, sections: sectionsWtns} = await binFileUtils.readBinFile(witnessFileName, "wtns", 2, 1<<25, 1<<23);
+    const {fd: fdZKey, sections: sectionsZKey} = await binFileUtils.readBinFile(zkeyFileName, "zkey", 2, 1<<25, 1<<23);
+    const zkey = await zkeyUtils.readHeader(fdZKey, sectionsZKey);
 
+    if (logger) logger.debug("Reading Coeffs");
+    const buffCoeffs = await binFileUtils.readSection(fdZKey, sectionsZKey, 4);
+    const buffBasesA = await binFileUtils.readSection(fdZKey, sectionsZKey, 5);
+    const buffBasesB1 = await binFileUtils.readSection(fdZKey, sectionsZKey, 6);
+    const buffBasesB2 = await binFileUtils.readSection(fdZKey, sectionsZKey, 7);
+    const buffBasesC = await binFileUtils.readSection(fdZKey, sectionsZKey, 8);
+    const buffBasesH = await binFileUtils.readSection(fdZKey, sectionsZKey, 9);
+    const zkeySections = [buffCoeffs, buffBasesA, buffBasesB1, buffBasesB2, buffBasesC, buffBasesH];
+    await fdZKey.close();
+
+    return groth16ProveMemory(zkey, zkeySections, witnessFileName, logger);
+}
+
+export async function groth16ProveMemory(zkey, zkeySections, witnessFileName, logger) {
+    const {fd: fdWtns, sections: sectionsWtns} = await binFileUtils.readBinFile(witnessFileName, "wtns", 2, 1<<25, 1<<23);
     const wtns = await wtnsUtils.readHeader(fdWtns, sectionsWtns);
 
-    const {fd: fdZKey, sections: sectionsZKey} = await binFileUtils.readBinFile(zkeyFileName, "zkey", 2, 1<<25, 1<<23);
-
-    const zkey = await zkeyUtils.readHeader(fdZKey, sectionsZKey);
+    const buffCoeffs = zkeySections[0];
 
     if (zkey.protocol != "groth16") {
         throw new Error("zkey file is not groth16");
@@ -55,8 +69,6 @@ export default async function groth16Prove(zkeyFileName, witnessFileName, logger
 
     if (logger) logger.debug("Reading Wtns");
     const buffWitness = await binFileUtils.readSection(fdWtns, sectionsWtns, 2);
-    if (logger) logger.debug("Reading Coeffs");
-    const buffCoeffs = await binFileUtils.readSection(fdZKey, sectionsZKey, 4);
 
     if (logger) logger.debug("Building ABC");
     const [buffA_T, buffB_T, buffC_T] = await buildABC1(curve, zkey, buffWitness, buffCoeffs, logger);
@@ -81,23 +93,23 @@ export default async function groth16Prove(zkeyFileName, witnessFileName, logger
     let proof = {};
 
     if (logger) logger.debug("Reading A Points");
-    const buffBasesA = await binFileUtils.readSection(fdZKey, sectionsZKey, 5);
+    const buffBasesA = zkeySections[1];
     proof.pi_a = await curve.G1.multiExpAffine(buffBasesA, buffWitness, logger, "multiexp A");
 
     if (logger) logger.debug("Reading B1 Points");
-    const buffBasesB1 = await binFileUtils.readSection(fdZKey, sectionsZKey, 6);
+    const buffBasesB1 = zkeySections[2];
     let pib1 = await curve.G1.multiExpAffine(buffBasesB1, buffWitness, logger, "multiexp B1");
 
     if (logger) logger.debug("Reading B2 Points");
-    const buffBasesB2 = await binFileUtils.readSection(fdZKey, sectionsZKey, 7);
+    const buffBasesB2 = zkeySections[3];
     proof.pi_b = await curve.G2.multiExpAffine(buffBasesB2, buffWitness, logger, "multiexp B2");
 
     if (logger) logger.debug("Reading C Points");
-    const buffBasesC = await binFileUtils.readSection(fdZKey, sectionsZKey, 8);
+    const buffBasesC = zkeySections[4];
     proof.pi_c = await curve.G1.multiExpAffine(buffBasesC, buffWitness.slice((zkey.nPublic+1)*curve.Fr.n8), logger, "multiexp C");
 
     if (logger) logger.debug("Reading H Points");
-    const buffBasesH = await binFileUtils.readSection(fdZKey, sectionsZKey, 9);
+    const buffBasesH = zkeySections[5];
     const resH = await curve.G1.multiExpAffine(buffBasesH, buffPodd_T, logger, "multiexp H");
 
     const r = curve.Fr.random();
@@ -134,7 +146,6 @@ export default async function groth16Prove(zkeyFileName, witnessFileName, logger
     proof.protocol = "groth16";
     proof.curve = curve.name;
 
-    await fdZKey.close();
     await fdWtns.close();
 
     proof = stringifyBigInts(proof);
