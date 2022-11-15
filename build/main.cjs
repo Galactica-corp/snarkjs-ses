@@ -755,13 +755,27 @@ async function read(fileName) {
 const {stringifyBigInts: stringifyBigInts$3} = ffjavascript.utils;
 
 async function groth16Prove(zkeyFileName, witnessFileName, logger) {
-    const {fd: fdWtns, sections: sectionsWtns} = await binFileUtils__namespace.readBinFile(witnessFileName, "wtns", 2, 1<<25, 1<<23);
+    const {fd: fdZKey, sections: sectionsZKey} = await binFileUtils__namespace.readBinFile(zkeyFileName, "zkey", 2, 1<<25, 1<<23);
+    const zkey = await readHeader$1(fdZKey, sectionsZKey);
 
+    if (logger) logger.debug("Reading Coeffs");
+    const buffCoeffs = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 4);
+    const buffBasesA = await binFileUtils.readSection(fdZKey, sectionsZKey, 5);
+    const buffBasesB1 = await binFileUtils.readSection(fdZKey, sectionsZKey, 6);
+    const buffBasesB2 = await binFileUtils.readSection(fdZKey, sectionsZKey, 7);
+    const buffBasesC = await binFileUtils.readSection(fdZKey, sectionsZKey, 8);
+    const buffBasesH = await binFileUtils.readSection(fdZKey, sectionsZKey, 9);
+    const zkeySections = [buffCoeffs, buffBasesA, buffBasesB1, buffBasesB2, buffBasesC, buffBasesH];
+    await fdZKey.close();
+
+    return groth16ProveMemory(zkey, zkeySections, witnessFileName, logger);
+}
+
+async function groth16ProveMemory(zkey, zkeySections, witnessFileName, logger) {
+    const {fd: fdWtns, sections: sectionsWtns} = await binFileUtils__namespace.readBinFile(witnessFileName, "wtns", 2, 1<<25, 1<<23);
     const wtns = await readHeader(fdWtns, sectionsWtns);
 
-    const {fd: fdZKey, sections: sectionsZKey} = await binFileUtils__namespace.readBinFile(zkeyFileName, "zkey", 2, 1<<25, 1<<23);
-
-    const zkey = await readHeader$1(fdZKey, sectionsZKey);
+    const buffCoeffs = zkeySections[0];
 
     if (zkey.protocol != "groth16") {
         throw new Error("zkey file is not groth16");
@@ -784,8 +798,6 @@ async function groth16Prove(zkeyFileName, witnessFileName, logger) {
 
     if (logger) logger.debug("Reading Wtns");
     const buffWitness = await binFileUtils__namespace.readSection(fdWtns, sectionsWtns, 2);
-    if (logger) logger.debug("Reading Coeffs");
-    const buffCoeffs = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 4);
 
     if (logger) logger.debug("Building ABC");
     const [buffA_T, buffB_T, buffC_T] = await buildABC1(curve, zkey, buffWitness, buffCoeffs, logger);
@@ -810,23 +822,23 @@ async function groth16Prove(zkeyFileName, witnessFileName, logger) {
     let proof = {};
 
     if (logger) logger.debug("Reading A Points");
-    const buffBasesA = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 5);
+    const buffBasesA = zkeySections[1];
     proof.pi_a = await curve.G1.multiExpAffine(buffBasesA, buffWitness, logger, "multiexp A");
 
     if (logger) logger.debug("Reading B1 Points");
-    const buffBasesB1 = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 6);
+    const buffBasesB1 = zkeySections[2];
     let pib1 = await curve.G1.multiExpAffine(buffBasesB1, buffWitness, logger, "multiexp B1");
 
     if (logger) logger.debug("Reading B2 Points");
-    const buffBasesB2 = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 7);
+    const buffBasesB2 = zkeySections[3];
     proof.pi_b = await curve.G2.multiExpAffine(buffBasesB2, buffWitness, logger, "multiexp B2");
 
     if (logger) logger.debug("Reading C Points");
-    const buffBasesC = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 8);
+    const buffBasesC = zkeySections[4];
     proof.pi_c = await curve.G1.multiExpAffine(buffBasesC, buffWitness.slice((zkey.nPublic+1)*curve.Fr.n8), logger, "multiexp C");
 
     if (logger) logger.debug("Reading H Points");
-    const buffBasesH = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 9);
+    const buffBasesH = zkeySections[5];
     const resH = await curve.G1.multiExpAffine(buffBasesH, buffPodd_T, logger, "multiexp H");
 
     const r = curve.Fr.random();
@@ -863,7 +875,6 @@ async function groth16Prove(zkeyFileName, witnessFileName, logger) {
     proof.protocol = "groth16";
     proof.curve = curve.name;
 
-    await fdZKey.close();
     await fdWtns.close();
 
     proof = stringifyBigInts$3(proof);
@@ -1145,6 +1156,30 @@ async function wtnsCalculate(input, wasmFileName, wtnsFileName, options) {
     }
 }
 
+/**
+ * Patched alternative to wtnsCalculate that does not use the file system. (works better in SES)
+ * @param {*} wasm file as Uint8Array
+ * @param {*} options 
+ */
+ async function wtnsCalculateMemory(input, wasm, wtnsFileName, options) {
+    const wc = await circom_runtime.WitnessCalculatorBuilder(wasm);
+    if (wc.circom_version() == 1) {
+        const w = await wc.calculateBinWitness(input);
+
+        const fdWtns = await binFileUtils__namespace.createBinFile(wtnsFileName, "wtns", 2, 2);
+
+        await writeBin(fdWtns, w, wc.prime);
+        await fdWtns.close();
+    } else {
+        const fdWtns = await fastFile__namespace.createOverride(wtnsFileName);
+
+        const w = await wc.calculateWTNSBin(input);
+
+        await fdWtns.write(w);
+        await fdWtns.close();
+    }
+}
+
 /*
     Copyright 2018 0KIMS association.
 
@@ -1170,6 +1205,23 @@ async function groth16FullProve(input, wasmFile, zkeyFileName, logger) {
     };
     await wtnsCalculate(input, wasmFile, wtns);
     return await groth16Prove(zkeyFileName, wtns, logger);
+}
+
+
+/**
+ * Patched alternative to groth16FullProve that does not use the file system. (works better in SES)
+ * @param {*} wasm wasm file as Uint8Array
+ * @param {*} zkeyHeader zkeyHeader
+ * @param {*} zkeySections zkeyCoeffsBuffer
+ * @param {*} options 
+ * @returns witness as Uint8Array
+ */
+ async function groth16FullProveMemory(input, wasm, zkeyHeader, zkeySections, logger) {
+    const wtns= {
+        type: "mem"
+    };
+    /*let wtns = */await wtnsCalculate(input, wasm, wtns);
+    return await groth16ProveMemory(zkeyHeader, zkeySections, wtns, logger);
 }
 
 /*
@@ -1310,6 +1362,7 @@ async function groth16ExportSolidityCallData(proof, pub) {
 var groth16 = /*#__PURE__*/Object.freeze({
     __proto__: null,
     fullProve: groth16FullProve,
+    fullProveMemory: groth16FullProveMemory,
     prove: groth16Prove,
     verify: groth16Verify,
     exportSolidityCallData: groth16ExportSolidityCallData
@@ -3861,6 +3914,7 @@ async function wtnsDebug(input, wasmFileName, wtnsFileName, symName, options, lo
 
     const fdWasm = await fastFile__namespace.readExisting(wasmFileName);
     const wasm = await fdWasm.read(fdWasm.totalSize);
+
     await fdWasm.close();
 
 
@@ -3871,13 +3925,13 @@ async function wtnsDebug(input, wasmFileName, wtnsFileName, symName, options, lo
     if (options.set) {
         if (!sym) sym = await loadSymbols(symName);
         wcOps.logSetSignal= function(labelIdx, value) {
-            if (logger) logger.info("SET " + sym.labelIdx2Name[labelIdx] + " <-- " + value.toString());
+            if (logger) logger.info("SET " + sym.labelIdx2Name[labelIdx] + " < -- " + value.toString());
         };
     }
     if (options.get) {
         if (!sym) sym = await loadSymbols(symName);
         wcOps.logGetSignal= function(varIdx, value) {
-            if (logger) logger.info("GET " + sym.labelIdx2Name[varIdx] + " --> " + value.toString());
+            if (logger) logger.info("GET " + sym.labelIdx2Name[varIdx] + " -- > " + value.toString());
         };
     }
     if (options.trigger) {
@@ -5975,7 +6029,8 @@ var zkey = /*#__PURE__*/Object.freeze({
     exportJson: zkeyExportJson,
     bellmanContribute: bellmanContribute,
     exportVerificationKey: zkeyExportVerificationKey,
-    exportSolidityVerifier: exportSolidityVerifier
+    exportSolidityVerifier: exportSolidityVerifier,
+    readHeader: readHeader$1
 });
 
 /*
