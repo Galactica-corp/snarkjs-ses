@@ -1200,7 +1200,7 @@ async function groth16FullProveMemory(input, wasm, zkeyHeader, zkeySections, log
     };
     // let wtns = await wtnsCalculateMemory(input, wasm, wtns);
     await wtnsCalculate(input, wasm, wtns);
-    return await groth16_proveMemory(zkeyHeader, zkeySections, wtns, logger);
+    return await groth16ProveMemory(zkeyHeader, zkeySections, wtns, logger);
 }
 
 /*
