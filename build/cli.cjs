@@ -289,6 +289,7 @@ async function clProcessor(commands) {
     for (let i=0; i<commands.length; i++) {
         const cmd = commands[i];
         const m = calculateMatch(commands[i], cl);
+        let res;
         if (m) {
             if ((argv.h) || (argv.help)) {
                 helpCmd(cmd);
@@ -297,16 +298,16 @@ async function clProcessor(commands) {
             if (areParamsValid(cmd.cmd, m)) {
                 if (cmd.options) {
                     const options = getOptions(cmd.options);
-                    await cmd.action(m, options);
+                    res = await cmd.action(m, options);
                 } else {
-                    await cmd.action(m, {});
+                    res = await cmd.action(m, {});
                 }
             } else {
                 if (m.length>0) console.log("Invalid number of parameters");
                 helpCmd(cmd);
                 return 99;
             }
-            return;
+            return res;
         }
     }
     if (cl.length>0) console.log("Invalid command");
@@ -751,12 +752,15 @@ ffjavascript.Scalar.e("218882428718392752222464057452572750885483644004160343436
 const bls12381q = ffjavascript.Scalar.e("1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab", 16);
 const bn128q = ffjavascript.Scalar.e("21888242871839275222246405745257275088696311157297823662689037894645226208583");
 
+// Use a single thread in ses and unittests, otherwise the await will block the main thread
+const singleThread = true;
+
 async function getCurveFromQ(q) {
     let curve;
     if (ffjavascript.Scalar.eq(q, bn128q)) {
-        curve = await ffjavascript.buildBn128();
+        curve = await ffjavascript.buildBn128(singleThread);
     } else if (ffjavascript.Scalar.eq(q, bls12381q)) {
-        curve = await ffjavascript.buildBls12381();
+        curve = await ffjavascript.buildBls12381(singleThread);
     } else {
         throw new Error(`Curve not supported: ${ffjavascript.Scalar.toString(q)}`);
     }
@@ -767,9 +771,9 @@ async function getCurveFromName(name) {
     let curve;
     const normName = normalizeName(name);
     if (["BN128", "BN254", "ALTBN128"].indexOf(normName) >= 0) {
-        curve = await ffjavascript.buildBn128();
+        curve = await ffjavascript.buildBn128(singleThread);
     } else if (["BLS12381"].indexOf(normName) >= 0) {
-        curve = await ffjavascript.buildBls12381();
+        curve = await ffjavascript.buildBls12381(singleThread);
     } else {
         throw new Error(`Curve not supported: ${name}`);
     }
@@ -5488,13 +5492,27 @@ async function read(fileName) {
 const {stringifyBigInts: stringifyBigInts$2} = ffjavascript.utils;
 
 async function groth16Prove$1(zkeyFileName, witnessFileName, logger) {
-    const {fd: fdWtns, sections: sectionsWtns} = await binFileUtils__namespace.readBinFile(witnessFileName, "wtns", 2, 1<<25, 1<<23);
+    const {fd: fdZKey, sections: sectionsZKey} = await binFileUtils__namespace.readBinFile(zkeyFileName, "zkey", 2, 1<<25, 1<<23);
+    const zkey = await readHeader$1(fdZKey, sectionsZKey);
 
+    if (logger) logger.debug("Reading Coeffs");
+    const buffCoeffs = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 4);
+    const buffBasesA = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 5);
+    const buffBasesB1 = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 6);
+    const buffBasesB2 = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 7);
+    const buffBasesC = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 8);
+    const buffBasesH = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 9);
+    const zkeySections = [buffCoeffs, buffBasesA, buffBasesB1, buffBasesB2, buffBasesC, buffBasesH];
+    await fdZKey.close();
+
+    return groth16ProveMemory(zkey, zkeySections, witnessFileName, logger);
+}
+
+async function groth16ProveMemory(zkey, zkeySections, witnessFileName, logger) {
+    const {fd: fdWtns, sections: sectionsWtns} = await binFileUtils__namespace.readBinFile(witnessFileName, "wtns", 2, 1<<25, 1<<23);
     const wtns = await readHeader(fdWtns, sectionsWtns);
 
-    const {fd: fdZKey, sections: sectionsZKey} = await binFileUtils__namespace.readBinFile(zkeyFileName, "zkey", 2, 1<<25, 1<<23);
-
-    const zkey = await readHeader$1(fdZKey, sectionsZKey);
+    const buffCoeffs = zkeySections[0];
 
     if (zkey.protocol != "groth16") {
         throw new Error("zkey file is not groth16");
@@ -5517,8 +5535,6 @@ async function groth16Prove$1(zkeyFileName, witnessFileName, logger) {
 
     if (logger) logger.debug("Reading Wtns");
     const buffWitness = await binFileUtils__namespace.readSection(fdWtns, sectionsWtns, 2);
-    if (logger) logger.debug("Reading Coeffs");
-    const buffCoeffs = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 4);
 
     if (logger) logger.debug("Building ABC");
     const [buffA_T, buffB_T, buffC_T] = await buildABC1(curve, zkey, buffWitness, buffCoeffs, logger);
@@ -5543,23 +5559,23 @@ async function groth16Prove$1(zkeyFileName, witnessFileName, logger) {
     let proof = {};
 
     if (logger) logger.debug("Reading A Points");
-    const buffBasesA = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 5);
+    const buffBasesA = zkeySections[1];
     proof.pi_a = await curve.G1.multiExpAffine(buffBasesA, buffWitness, logger, "multiexp A");
 
     if (logger) logger.debug("Reading B1 Points");
-    const buffBasesB1 = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 6);
+    const buffBasesB1 = zkeySections[2];
     let pib1 = await curve.G1.multiExpAffine(buffBasesB1, buffWitness, logger, "multiexp B1");
 
     if (logger) logger.debug("Reading B2 Points");
-    const buffBasesB2 = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 7);
+    const buffBasesB2 = zkeySections[3];
     proof.pi_b = await curve.G2.multiExpAffine(buffBasesB2, buffWitness, logger, "multiexp B2");
 
     if (logger) logger.debug("Reading C Points");
-    const buffBasesC = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 8);
+    const buffBasesC = zkeySections[4];
     proof.pi_c = await curve.G1.multiExpAffine(buffBasesC, buffWitness.slice((zkey.nPublic+1)*curve.Fr.n8), logger, "multiexp C");
 
     if (logger) logger.debug("Reading H Points");
-    const buffBasesH = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 9);
+    const buffBasesH = zkeySections[5];
     const resH = await curve.G1.multiExpAffine(buffBasesH, buffPodd_T, logger, "multiexp H");
 
     const r = curve.Fr.random();
@@ -5596,7 +5612,6 @@ async function groth16Prove$1(zkeyFileName, witnessFileName, logger) {
     proof.protocol = "groth16";
     proof.curve = curve.name;
 
-    await fdZKey.close();
     await fdWtns.close();
 
     proof = stringifyBigInts$2(proof);

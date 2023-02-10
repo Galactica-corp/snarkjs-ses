@@ -44,6 +44,7 @@ ffjavascript.Scalar.e("218882428718392752222464057452572750885483644004160343436
 const bls12381q = ffjavascript.Scalar.e("1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab", 16);
 const bn128q = ffjavascript.Scalar.e("21888242871839275222246405745257275088696311157297823662689037894645226208583");
 
+// Use a single thread in ses and unittests, otherwise the await will block the main thread
 const singleThread = true;
 
 async function getCurveFromQ(q) {
@@ -750,11 +751,11 @@ async function groth16Prove(zkeyFileName, witnessFileName, logger) {
 
     if (logger) logger.debug("Reading Coeffs");
     const buffCoeffs = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 4);
-    const buffBasesA = await binFileUtils.readSection(fdZKey, sectionsZKey, 5);
-    const buffBasesB1 = await binFileUtils.readSection(fdZKey, sectionsZKey, 6);
-    const buffBasesB2 = await binFileUtils.readSection(fdZKey, sectionsZKey, 7);
-    const buffBasesC = await binFileUtils.readSection(fdZKey, sectionsZKey, 8);
-    const buffBasesH = await binFileUtils.readSection(fdZKey, sectionsZKey, 9);
+    const buffBasesA = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 5);
+    const buffBasesB1 = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 6);
+    const buffBasesB2 = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 7);
+    const buffBasesC = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 8);
+    const buffBasesH = await binFileUtils__namespace.readSection(fdZKey, sectionsZKey, 9);
     const zkeySections = [buffCoeffs, buffBasesA, buffBasesB1, buffBasesB2, buffBasesC, buffBasesH];
     await fdZKey.close();
 
@@ -1140,29 +1141,6 @@ async function wtnsCalculate(input, wasmFileName, wtnsFileName, options) {
         const fdWtns = await fastFile__namespace.createOverride(wtnsFileName);
 
         const w = await wc.calculateWTNSBin(input);
-        await fdWtns.write(w);
-        await fdWtns.close();
-    }
-}
-
-/**
- * Patched alternative to wtnsCalculate that does not use the file system. (works better in SES)
- * @param {*} wasm file as Uint8Array
- * @param {*} options 
- */
- async function wtnsCalculateMemory(input, wasm, wtnsFileName, options) {
-    const wc = await circom_runtime.WitnessCalculatorBuilder(wasm);
-    if (wc.circom_version() == 1) {
-        const w = await wc.calculateBinWitness(input);
-
-        const fdWtns = await binFileUtils__namespace.createBinFile(wtnsFileName, "wtns", 2, 2);
-
-        await writeBin(fdWtns, w, wc.prime);
-        await fdWtns.close();
-    } else {
-        const fdWtns = await fastFile__namespace.createOverride(wtnsFileName);
-
-        const w = await wc.calculateWTNSBin(input);
 
         await fdWtns.write(w);
         await fdWtns.close();
@@ -1204,12 +1182,13 @@ async function groth16FullProve(input, wasmFile, zkeyFileName, logger) {
  * @param {*} options 
  * @returns witness as Uint8Array
  */
- async function groth16FullProveMemory(input, wasm, zkeyHeader, zkeySections, logger) {
+async function groth16FullProveMemory(input, wasm, zkeyHeader, zkeySections, logger) {
     const wtns= {
         type: "mem"
     };
-    /*let wtns = */await wtnsCalculateMemory(input, wasm, wtns);
-    return await groth16ProveMemory(zkeyHeader, zkeySections, wtns, logger);
+    // let wtns = await wtnsCalculateMemory(input, wasm, wtns);
+    await wtnsCalculate(input, wasm, wtns);
+    return await groth16_proveMemory(zkeyHeader, zkeySections, wtns, logger);
 }
 
 /*
@@ -6018,7 +5997,8 @@ var zkey = /*#__PURE__*/Object.freeze({
     exportJson: zkeyExportJson,
     bellmanContribute: bellmanContribute,
     exportVerificationKey: zkeyExportVerificationKey,
-    exportSolidityVerifier: exportSolidityVerifier
+    exportSolidityVerifier: exportSolidityVerifier,
+    readHeader: readHeader$1
 });
 
 /*

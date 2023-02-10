@@ -6,7 +6,8 @@ const bn128r = Scalar.e("2188824287183927522224640574525727508854836440041603434
 const bls12381q = Scalar.e("1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab", 16);
 const bn128q = Scalar.e("21888242871839275222246405745257275088696311157297823662689037894645226208583");
 
-const singleThread = process.ses
+// Use a single thread in ses and unittests, otherwise the await will block the main thread
+const singleThread = true
 
 export async function getCurveFromR(r) {
     let curve;
