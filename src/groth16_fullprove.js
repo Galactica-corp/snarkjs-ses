@@ -19,10 +19,13 @@
 
 import groth16_prove from "./groth16_prove.js";
 import wtns_calculate from "./wtns_calculate.js";
-import { wtnsCalculateMemory } from "./wtns_calculate.js";
 import { groth16ProveMemory } from "./groth16_prove.js";
+import {utils} from "ffjavascript";
+const {unstringifyBigInts} = utils;
 
-export default async function groth16FullProve(input, wasmFile, zkeyFileName, logger) {
+export default async function groth16FullProve(_input, wasmFile, zkeyFileName, logger) {
+    const input = unstringifyBigInts(_input);
+
     const wtns= {
         type: "mem"
     };
@@ -38,11 +41,11 @@ export default async function groth16FullProve(input, wasmFile, zkeyFileName, lo
  * @param {*} options 
  * @returns witness as Uint8Array
  */
-export async function groth16FullProveMemory(input, wasm, zkeyHeader, zkeySections, logger) {
+export async function groth16FullProveMemory(_input, wasm, zkeyHeader, zkeySections, logger) {
     const wtns= {
         type: "mem"
     };
-    // let wtns = await wtnsCalculateMemory(input, wasm, wtns);
+    const input = unstringifyBigInts(_input);
     await wtns_calculate(input, wasm, wtns);
     return await groth16ProveMemory(zkeyHeader, zkeySections, wtns, logger);
 }
